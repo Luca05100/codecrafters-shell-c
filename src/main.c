@@ -87,7 +87,13 @@ int main(int argc, char *argv[]) {
         perror("getcwd() error");
       }
     }
-
+    // CD command 
+    else if (strncmp(command, "cd ", 3) == 0) {
+      char *path = command + 3;
+      if (chdir(path) != 0) {
+        printf("cd: no such file or directory: %s\n", path);
+      }
+    }
     //RUN command
     else {
       char *args[100];
