@@ -2,6 +2,8 @@
 #include <stdlib.h>
 #include <string.h>
 #include <unistd.h>
+#include <sys/types.h>
+#include <sys/wait.h>
 
 int main(int argc, char *argv[]) {
   char command[1024];
@@ -75,11 +77,33 @@ int main(int argc, char *argv[]) {
       }
     }
     }
+    //RUN command
     else {
-      printf("%s: command not found\n", command);
-    }
-    
+      char *args[100];
+      int i = 0;
 
+      char *token = strtok(command, " ");
+      while(token != NULL) {
+        args[i++] = token;
+        token = strtok(NULL, " ");
+      }
+      args[i] = NULL;
+
+      pid_t pid = fork();
+      if (pid == 0) {
+        execvp(args[0], args);
+
+        printf("%s: command not found\n", args[0]);
+        exit(1);
+    }
+      else if (pid > 0 ) {
+        int status;
+        wait(&status);
+      }
+    else {
+        perror("Fork failed");
+      }
    } 
+  }
   return 0;
 }
