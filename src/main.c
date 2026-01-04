@@ -25,6 +25,7 @@ int main(int argc, char *argv[]) {
       continue;
     }
 
+    //exit command
     if (strcmp(command, "exit 0") == 0 || strcmp(command, "exit") == 0) {
       exit(0);
       break;
@@ -37,12 +38,23 @@ int main(int argc, char *argv[]) {
     else if (strcmp(command, "echo") == 0) {
       printf("\n");
     }
+
+    //type command
+    else if(strncmp(command, "type ", 5) == 0) {
+      char *arg = command + 5;
+      if(strcmp(arg, "exit") == 0 ||
+      strcmp(arg, "echo") == 0 ||
+      strcmp(arg, "type") == 0) {
+        printf("%s is a shell builtin\n", arg);
+      }
+      else {
+        printf("%s: not found\n", arg);
+      }
+    }
     else {
-      printf("%s: command not found\n", command);
+      printf("%s: not found\n", command);
     }
 
-  }
-
-
+   } 
   return 0;
 }
