@@ -90,10 +90,24 @@ int main(int argc, char *argv[]) {
     // CD command 
     else if (strncmp(command, "cd ", 3) == 0) {
       char *path = command + 3;
-      if (chdir(path) != 0) {
-        printf("cd: no such file or directory: %s\n", path);
+      char expanded_path[1024];
+      char *home = getenv("HOME");
+
+      if(strcmp(path, "~") == 0) {
+        strcpy(expanded_path, home);
+      }
+      else if (strncmp(path, "~/", 2) == 0) {
+        sprintf(expanded_path, "%s/%s", home, path + 1);
+      } 
+      else {
+        strcpy(expanded_path, path);
+      }
+      if (chdir(expanded_path) != 0) {
+        printf("cd: no such file or directory: %s\n", expanded_path);
       }
     }
+  
+
     //RUN command
     else {
       char *args[100];
