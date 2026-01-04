@@ -47,7 +47,8 @@ int main(int argc, char *argv[]) {
       char *arg = command + 5;
       if(strcmp(arg, "exit") == 0 ||
       strcmp(arg, "echo") == 0 ||
-      strcmp(arg, "type") == 0) {
+      strcmp(arg, "type") == 0 ||
+      strcmp(arg, "pwd") == 0) {
         printf("%s is a shell builtin\n", arg);
       }
     
@@ -77,6 +78,16 @@ int main(int argc, char *argv[]) {
       }
     }
     }
+   //PWD command
+    else if (strcmp(command, "pwd") == 0) {
+      char cwd[1024];
+      if (getcwd(cwd, sizeof(cwd)) != NULL) {
+        printf("%s\n", cwd);
+      } else {
+        perror("getcwd() error");
+      }
+    }
+
     //RUN command
     else {
       char *args[100];
@@ -104,6 +115,7 @@ int main(int argc, char *argv[]) {
         perror("Fork failed");
       }
    } 
+
   }
   return 0;
 }
