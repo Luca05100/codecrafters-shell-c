@@ -29,6 +29,14 @@ int main(int argc, char *argv[]) {
       exit(0);
       break;
     }
+
+    //echo command
+   else if(strncmp(command, "echo ", 5) == 0) {
+      printf("%s\n", command + 5);
+    }
+    else if (strcmp(command, "echo") == 0) {
+      printf("\n");
+    }
     else {
       printf("%s: command not found\n", command);
     }
