@@ -35,16 +35,30 @@ int main(int argc, char *argv[]) {
 
     char current_token[1024];
     int token_index = 0;
-    int in_quotes = 0;
+    int in_quotes_single = 0;
+    int in_quotes_double = 0;
 
     for(int i = 0; i < len; i++) { 
       char c = command[i];
 
-      if(c == '\'') { 
-        in_quotes = !in_quotes;
-        continue;
+      if(c == '\'') {
+        if(in_quotes_double) {
+          current_token[token_index++] = c;
+        } 
+        else {
+          in_quotes_single = !in_quotes_single;
+        }
       }
-      else if(c == ' ' && !in_quotes) {
+
+      else if(c == '"') {
+        if(in_quotes_single) {
+          current_token[token_index++] = c;
+        }
+        else {
+          in_quotes_double = !in_quotes_double;
+        }
+      }
+      else if(c == ' ' && !in_quotes_single && !in_quotes_double) {
         if(token_index > 0) {
           current_token[token_index] = '\0';
           args[arg_count++] = strdup(current_token);
