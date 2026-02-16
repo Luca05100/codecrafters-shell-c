@@ -37,9 +37,19 @@ int main(int argc, char *argv[]) {
     int token_index = 0;
     int in_quotes_single = 0;
     int in_quotes_double = 0;
+    int is_escaped = 0;
 
     for(int i = 0; i < len; i++) { 
       char c = command[i];
+      if(is_escaped) {
+        current_token[token_index++] = c;
+        is_escaped = 0;
+        continue;
+      }
+      if(c == '\\' && !in_quotes_single && !in_quotes_double) {
+        is_escaped = 1;
+        continue;
+      }
 
       if(c == '\'') {
         if(in_quotes_double) {
