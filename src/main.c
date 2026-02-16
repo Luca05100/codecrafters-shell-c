@@ -75,8 +75,19 @@ int main(int argc, char *argv[]) {
           token_index = 0;
         }
       }
-      else {
-        current_token[token_index++] = c;
+ else {
+        if (in_quotes_double && c == '\\') {
+          char next = command[i + 1];
+          if (next == '"' || next == '\\') {
+            current_token[token_index++] = next;
+            i++; 
+          } else {
+            current_token[token_index++] = c; 
+          }
+        } 
+        else {
+          current_token[token_index++] = c;
+        }
       }
     }
     
