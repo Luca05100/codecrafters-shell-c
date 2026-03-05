@@ -4,6 +4,7 @@
 #include <unistd.h>
 #include <sys/types.h>
 #include <sys/wait.h>
+#include <fcntl.h>
 
 int main(int argc, char *argv[]) {
   char command[1024];
@@ -75,7 +76,7 @@ int main(int argc, char *argv[]) {
           token_index = 0;
         }
       }
- else {
+      else {
         if (in_quotes_double && c == '\\') {
           char next = command[i + 1];
           if (next == '"' || next == '\\') {
@@ -100,8 +101,38 @@ int main(int argc, char *argv[]) {
 
     if (arg_count == 0) continue;
 
+    // Save the original argument count before any modifications for redirection, so we can free memory correctly later
+    int original_arg_count = arg_count;
+
+    //Detect redirection
+    char *output_file = NULL;
+    for (int i = 0; i < arg_count; i++) {
+        if (strcmp(args[i], ">") == 0 || strcmp(args[i], "1>") == 0) {
+            if (i + 1 < arg_count) {
+                output_file = args[i + 1];
+                args[i] = NULL; 
+                arg_count = i;  
+            }
+            break;
+        }
+    }
+
+    // --- PREGATIM FISIERUL DACA AVEM REDIRECTIONARE ---
+    int saved_stdout = -1;
+    if (output_file != NULL) {
+        int fd = open(output_file, O_WRONLY | O_CREAT | O_TRUNC, 0644);
+        if (fd != -1) {
+            saved_stdout = dup(STDOUT_FILENO); // Salvam unde scria inainte (spre monitor)
+            dup2(fd, STDOUT_FILENO);           // Facem ca stdout sa indice catre fisier
+            close(fd);                         // fd vechi nu mai e necesar
+        } else {
+            perror("open error");
+        }
+    }
+
     //exit command
     if (strcmp(args[0], "exit") == 0) {
+      if (saved_stdout != -1) { dup2(saved_stdout, STDOUT_FILENO); close(saved_stdout); }
       exit(0);
       break;
     }
@@ -115,11 +146,16 @@ int main(int argc, char *argv[]) {
         }
       }
       printf("\n");
+      fflush(stdout); 
     }
 
     //type command
     else if(strcmp(args[0], "type") == 0) {
-      if (arg_count < 2) continue; // Safety check
+      if (arg_count < 2) {
+          // Cleanup daca nu sunt destule argumente
+          if (saved_stdout != -1) { dup2(saved_stdout, STDOUT_FILENO); close(saved_stdout); }
+          continue; 
+      }
       char *arg = args[1];
       
       if(strcmp(arg, "exit") == 0 ||
@@ -158,7 +194,7 @@ int main(int argc, char *argv[]) {
       }
     }
 
-   //PWD command (Modificat să folosească args[0])
+   //PWD command (Modified to use args[0])
     else if (strcmp(args[0], "pwd") == 0) {
       char cwd[1024];
       if (getcwd(cwd, sizeof(cwd)) != NULL) {
@@ -168,9 +204,8 @@ int main(int argc, char *argv[]) {
       }
     }
 
-    // CD command (Modificat să folosească args[0] și args[1])
+    // CD command (modified to use args[0] and args[1])
     else if (strcmp(args[0], "cd") == 0) {
-      // Dacă există args[1] îl folosim, altfel mergem la "~"
       char *path = (arg_count > 1) ? args[1] : "~"; 
       char expanded_path[1024];
       char *home = getenv("HOME");
@@ -198,7 +233,8 @@ int main(int argc, char *argv[]) {
       if (pid == 0) {
         execvp(args[0], args);
 
-        printf("%s: command not found\n", args[0]);
+        //if we reach here, there was an error executing the command
+        fprintf(stderr, "%s: command not found\n", args[0]);
         exit(1);
       }
       else if (pid > 0 ) {
@@ -210,7 +246,16 @@ int main(int argc, char *argv[]) {
       }
    } 
    
-   for(int i=0; i<arg_count; i++) free(args[i]);
+   //restore terminal
+   if (saved_stdout != -1) {
+       dup2(saved_stdout, STDOUT_FILENO); 
+       close(saved_stdout);              
+   }
+
+   //Cleanup memory
+   for(int i=0; i < original_arg_count; i++) {
+       if (args[i] != NULL) free(args[i]);
+   }
 
   }
   return 0;
