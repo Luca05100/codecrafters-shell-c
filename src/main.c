@@ -12,6 +12,80 @@
 const char *builtins[] = {"echo", "exit", "type", "pwd", "cd"};
 const int num_builtins = 5;
 
+// Function to check if a command is a builtin
+int is_builtin(char *cmd) {
+    for (int i = 0; i < num_builtins; i++) {
+        if (strcmp(cmd, builtins[i]) == 0) {
+            return 1;
+        }
+    }
+    return 0;
+}
+
+// Function to execute builtin commands in a child process (for pipelines)
+void execute_builtin_in_child(char **args, int arg_count) {
+    if (strcmp(args[0], "echo") == 0) {
+        for(int i = 1; i < arg_count; i++) {
+            printf("%s", args[i]);
+            if (i < arg_count - 1) {
+                printf(" ");
+            }
+        }
+        printf("\n");
+        fflush(stdout);
+    }
+    else if (strcmp(args[0], "pwd") == 0) {
+        char cwd[1024];
+        if (getcwd(cwd, sizeof(cwd)) != NULL) {
+            printf("%s\n", cwd);
+            fflush(stdout);
+        } else {
+            perror("getcwd() error");
+        }
+    }
+    else if (strcmp(args[0], "type") == 0) {
+        if (arg_count < 2) {
+            return;
+        }
+        char *arg = args[1];
+
+        if(is_builtin(arg)) {
+            printf("%s is a shell builtin\n", arg);
+            fflush(stdout);
+        }
+        else {
+            char *env = getenv("PATH");
+            if (!env) {
+                printf("%s: not found\n", arg);
+                fflush(stdout);
+            } else {
+                char *path_copy = strdup(env);
+                char *dir = strtok(path_copy, ":");
+                int found = 0;
+
+                while(dir != NULL) {
+                    char full_path[1024];
+                    snprintf(full_path, sizeof(full_path), "%s/%s", dir, arg);
+
+                    if (access(full_path, X_OK) == 0) {
+                        printf("%s is %s\n", arg, full_path);
+                        fflush(stdout);
+                        found = 1;
+                        break;
+                    }
+                    dir = strtok(NULL, ":");
+                }
+                free(path_copy);
+                if (!found) {
+                    printf("%s: not found\n", arg);
+                    fflush(stdout);
+                }
+            }
+        }
+    }
+    // Note: cd and exit don't make sense in child pipelines, so we skip them
+}
+
 void enable_raw_mode(struct termios *orig_termios) {
     tcgetattr(STDIN_FILENO, orig_termios);
     struct termios raw = *orig_termios;
@@ -367,229 +441,210 @@ int main(int argc, char *argv[]) {
         }
     }
 
-    //exit command
-    if (strcmp(args[0], "exit") == 0) {
-      if (saved_stdout != -1) { dup2(saved_stdout, STDOUT_FILENO); close(saved_stdout); }
-      if (saved_stderr != -1) { dup2(saved_stderr, STDERR_FILENO); close(saved_stderr); }
-      exit(0);
-      break;
-    }
-
-    //echo command
-    else if (strcmp(args[0], "echo") == 0) {
-      for(int i = 1; i < arg_count; i++) {
-        printf("%s", args[i]);
-        if (i < arg_count - 1) {
-          printf(" ");
+    // --- PIPELINE DETECTION ---
+    // Moved above built-in execution so pipes intercept commands first
+    int pipe_indices[50];
+    int pipe_count = 0;
+    for (int i = 0; i < arg_count; i++) {
+        if (args[i] != NULL && strcmp(args[i], "|") == 0) {
+            pipe_indices[pipe_count++] = i;
         }
-      }
-      printf("\n");
-      fflush(stdout); 
     }
 
-    //type command
-    else if(strcmp(args[0], "type") == 0) {
-      if (arg_count < 2) {
+    if (pipe_count > 0) {
+        // --- PIPELINE EXECUTION ---
+        int cmd_indices[pipe_count + 2];
+        cmd_indices[0] = 0;
+        for (int i = 0; i < pipe_count; i++) {
+            cmd_indices[i + 1] = pipe_indices[i];
+        }
+        cmd_indices[pipe_count + 1] = arg_count;
+
+        int pipes[50][2];
+        for (int i = 0; i < pipe_count; i++) {
+            if (pipe(pipes[i]) == -1) {
+                perror("pipe");
+                exit(1);
+            }
+        }
+
+        pid_t pids[50];
+        for (int i = 0; i <= pipe_count; i++) {
+            int cmd_start = cmd_indices[i];
+            int cmd_end = cmd_indices[i + 1];
+            
+            if (cmd_start < cmd_end && args[cmd_start] != NULL && strcmp(args[cmd_start], "|") == 0) {
+                cmd_start++;
+            }
+            
+            char *cmd_args[50];
+            int cmd_arg_count = 0;
+            for (int j = cmd_start; j < cmd_end; j++) {
+                if (args[j] != NULL && strcmp(args[j], "|") != 0) {
+                    cmd_args[cmd_arg_count++] = args[j];
+                }
+            }
+            cmd_args[cmd_arg_count] = NULL;
+
+            if (cmd_arg_count == 0) continue;
+
+            pids[i] = fork();
+            if (pids[i] == 0) {
+                if (i > 0) {
+                    dup2(pipes[i - 1][0], STDIN_FILENO);
+                }
+                if (i < pipe_count) {
+                    dup2(pipes[i][1], STDOUT_FILENO);
+                }
+
+                for (int j = 0; j < pipe_count; j++) {
+                    close(pipes[j][0]);
+                    close(pipes[j][1]);
+                }
+
+                if (is_builtin(cmd_args[0])) {
+                    execute_builtin_in_child(cmd_args, cmd_arg_count);
+                    exit(0);
+                } else {
+                    execvp(cmd_args[0], cmd_args);
+                    fprintf(stderr, "%s: command not found\n", cmd_args[0]);
+                    exit(1);
+                }
+            } else if (pids[i] < 0) {
+                perror("fork");
+                exit(1);
+            }
+        }
+
+        for (int i = 0; i < pipe_count; i++) {
+            close(pipes[i][0]);
+            close(pipes[i][1]);
+        }
+
+        for (int i = 0; i <= pipe_count; i++) {
+            int status;
+            waitpid(pids[i], &status, 0);
+        }
+    } 
+    else {
+        // --- SINGLE COMMAND EXECUTION ---
+        
+        //exit command
+        if (strcmp(args[0], "exit") == 0) {
           if (saved_stdout != -1) { dup2(saved_stdout, STDOUT_FILENO); close(saved_stdout); }
           if (saved_stderr != -1) { dup2(saved_stderr, STDERR_FILENO); close(saved_stderr); }
-          continue; 
-      }
-      char *arg = args[1];
-      
-      if(strcmp(arg, "exit") == 0 ||
-         strcmp(arg, "echo") == 0 ||
-         strcmp(arg, "type") == 0 ||
-         strcmp(arg, "pwd") == 0 ||
-         strcmp(arg, "cd") == 0) {
-        printf("%s is a shell builtin\n", arg);
-      }
-      //Path search
-      else {
-        char *env = getenv("PATH");
-        if (!env) {
-             printf("%s: not found\n", arg);
-        } else {
-            char *path_copy = strdup(env);
-            char *dir = strtok(path_copy, ":");
-            int found = 0;
-
-            while(dir != NULL) {
-                char full_path[1024];
-                snprintf(full_path, sizeof(full_path), "%s/%s", dir, arg);
-
-                if (access(full_path, X_OK) == 0) {
-                printf("%s is %s\n", arg, full_path);
-                found = 1;
-                break;
-                }
-                dir = strtok(NULL, ":");
-            }
-            free(path_copy);
-            if (!found) {
-                printf("%s: not found\n", arg);
-            }
+          exit(0);
         }
-      }
-    }
-
-   //PWD command (Modified to use args[0])
-    else if (strcmp(args[0], "pwd") == 0) {
-      char cwd[1024];
-      if (getcwd(cwd, sizeof(cwd)) != NULL) {
-        printf("%s\n", cwd);
-      } else {
-        perror("getcwd() error");
-      }
-    }
-
-    // CD command (modified to use args[0] and args[1])
-    else if (strcmp(args[0], "cd") == 0) {
-      char *path = (arg_count > 1) ? args[1] : "~"; 
-      char expanded_path[1024];
-      char *home = getenv("HOME");
-
-      if(strcmp(path, "~") == 0) {
-        strcpy(expanded_path, home);
-      }
-      else if (strncmp(path, "~/", 2) == 0) {
-        sprintf(expanded_path, "%s%s", home, path + 1);
-      } 
-      else {
-        strcpy(expanded_path, path);
-      }
-      
-      if (chdir(expanded_path) != 0) {
-        printf("cd: %s: No such file or directory\n", expanded_path);
-      }
-    }
-  
-    //RUN command 
-    else {
-      // Check if there's a pipe in the arguments
-      int pipe_indices[50];
-      int pipe_count = 0;
-      for (int i = 0; i < arg_count; i++) {
-          if (strcmp(args[i], "|") == 0) {
-              pipe_indices[pipe_count++] = i;
+        //echo command
+        else if (strcmp(args[0], "echo") == 0) {
+          for(int i = 1; i < arg_count; i++) {
+            printf("%s", args[i]);
+            if (i < arg_count - 1) {
+              printf(" ");
+            }
           }
-      }
+          printf("\n");
+          fflush(stdout); 
+        }
+        //type command
+        else if(strcmp(args[0], "type") == 0) {
+          if (arg_count >= 2) {
+              char *arg = args[1];
+              if(strcmp(arg, "exit") == 0 ||
+                 strcmp(arg, "echo") == 0 ||
+                 strcmp(arg, "type") == 0 ||
+                 strcmp(arg, "pwd") == 0 ||
+                 strcmp(arg, "cd") == 0) {
+                printf("%s is a shell builtin\n", arg);
+              } else {
+                char *env = getenv("PATH");
+                if (!env) {
+                     printf("%s: not found\n", arg);
+                } else {
+                    char *path_copy = strdup(env);
+                    char *dir = strtok(path_copy, ":");
+                    int found = 0;
 
-      // If there are pipes, handle as pipeline
-      if (pipe_count > 0) {
-          // Split commands into segments based on pipes
-          char **commands[pipe_count + 1];
-          int cmd_indices[pipe_count + 2];
-          cmd_indices[0] = 0;
-          for (int i = 0; i < pipe_count; i++) {
-              cmd_indices[i + 1] = pipe_indices[i];
-          }
-          cmd_indices[pipe_count + 1] = arg_count;
+                    while(dir != NULL) {
+                        char full_path[1024];
+                        snprintf(full_path, sizeof(full_path), "%s/%s", dir, arg);
 
-          // Create pipes and execute commands
-          int pipes[pipe_count][2];
-          for (int i = 0; i < pipe_count; i++) {
-              if (pipe(pipes[i]) == -1) {
-                  perror("pipe");
-                  exit(1);
+                        if (access(full_path, X_OK) == 0) {
+                            printf("%s is %s\n", arg, full_path);
+                            found = 1;
+                            break;
+                        }
+                        dir = strtok(NULL, ":");
+                    }
+                    free(path_copy);
+                    if (!found) {
+                        printf("%s: not found\n", arg);
+                    }
+                }
               }
           }
+        }
+        //PWD command
+        else if (strcmp(args[0], "pwd") == 0) {
+          char cwd[1024];
+          if (getcwd(cwd, sizeof(cwd)) != NULL) {
+            printf("%s\n", cwd);
+          } else {
+            perror("getcwd() error");
+          }
+        }
+        // CD command
+        else if (strcmp(args[0], "cd") == 0) {
+          char *path = (arg_count > 1) ? args[1] : "~"; 
+          char expanded_path[1024];
+          char *home = getenv("HOME");
 
-          pid_t pids[pipe_count + 1];
+          if(strcmp(path, "~") == 0) {
+            strcpy(expanded_path, home);
+          }
+          else if (strncmp(path, "~/", 2) == 0) {
+            sprintf(expanded_path, "%s%s", home, path + 1);
+          } 
+          else {
+            strcpy(expanded_path, path);
+          }
           
-          for (int i = 0; i <= pipe_count; i++) {
-              int cmd_start = cmd_indices[i];
-              int cmd_end = cmd_indices[i + 1];
-              
-              // Skip pipe symbols
-              if (cmd_start < cmd_end && strcmp(args[cmd_start], "|") == 0) {
-                  cmd_start++;
-              }
-              
-              // Create command arguments
-              char *cmd_args[cmd_end - cmd_start + 1];
-              int cmd_arg_count = 0;
-              for (int j = cmd_start; j < cmd_end; j++) {
-                  if (strcmp(args[j], "|") != 0) {
-                      cmd_args[cmd_arg_count++] = args[j];
-                  }
-              }
-              cmd_args[cmd_arg_count] = NULL;
-
-              if (cmd_arg_count == 0) continue;
-
-              pids[i] = fork();
-              if (pids[i] == 0) {
-                  // Redirect stdin from previous pipe (if not first command)
-                  if (i > 0) {
-                      dup2(pipes[i - 1][0], STDIN_FILENO);
-                  }
-                  // Redirect stdout to next pipe (if not last command)
-                  if (i < pipe_count) {
-                      dup2(pipes[i][1], STDOUT_FILENO);
-                  }
-
-                  // Close all pipe file descriptors
-                  for (int j = 0; j < pipe_count; j++) {
-                      close(pipes[j][0]);
-                      close(pipes[j][1]);
-                  }
-
-                  // Execute the command
-                  execvp(cmd_args[0], cmd_args);
-                  fprintf(stderr, "%s: command not found\n", cmd_args[0]);
-                  exit(1);
-              } else if (pids[i] < 0) {
-                  perror("fork");
-                  exit(1);
-              }
+          if (chdir(expanded_path) != 0) {
+            printf("cd: %s: No such file or directory\n", expanded_path);
           }
-
-          // Close all pipes in parent process
-          for (int i = 0; i < pipe_count; i++) {
-              close(pipes[i][0]);
-              close(pipes[i][1]);
-          }
-
-          // Wait for all child processes
-          for (int i = 0; i <= pipe_count; i++) {
-              int status;
-              waitpid(pids[i], &status, 0);
-          }
-      } 
-      else {
-          // No pipes, execute single command
+        }
+        //RUN command (External)
+        else {
           pid_t pid = fork();
-          
           if (pid == 0) {
-              execvp(args[0], args);
-              //if we reach here, there was an error executing the command
-              fprintf(stderr, "%s: command not found\n", args[0]);
-              exit(1);
+            execvp(args[0], args);
+            fprintf(stderr, "%s: command not found\n", args[0]);
+            exit(1);
           }
           else if (pid > 0 ) {
-              int status;
-              wait(&status);
+            int status;
+            wait(&status);
           }
           else {
-              perror("Fork failed");
+            perror("Fork failed");
           }
-      }
-   } 
+        }
+    }
    
-   //restore terminal
-   if (saved_stdout != -1) {
-       dup2(saved_stdout, STDOUT_FILENO); 
-       close(saved_stdout);              
-   }
-   if (saved_stderr != -1) {
-       dup2(saved_stderr, STDERR_FILENO);
-       close(saved_stderr);
-   }
+    //restore terminal
+    if (saved_stdout != -1) {
+        dup2(saved_stdout, STDOUT_FILENO); 
+        close(saved_stdout);              
+    }
+    if (saved_stderr != -1) {
+        dup2(saved_stderr, STDERR_FILENO);
+        close(saved_stderr);
+    }
 
-   //Cleanup memory
-   for(int i=0; i < original_arg_count; i++) {
-       if (args[i] != NULL) free(args[i]);
-   }
+    //Cleanup memory
+    for(int i=0; i < original_arg_count; i++) {
+        if (args[i] != NULL) free(args[i]);
+    }
 
   }
   return 0;
