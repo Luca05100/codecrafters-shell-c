@@ -5,6 +5,88 @@
 #include <sys/types.h>
 #include <sys/wait.h>
 #include <fcntl.h>
+#include <termios.h>
+
+// List of builtin commands for autocompletion
+const char *builtins[] = {"echo", "exit", "type", "pwd", "cd"};
+const int num_builtins = 5;
+
+void enable_raw_mode(struct termios *orig_termios) {
+    tcgetattr(STDIN_FILENO, orig_termios);
+    struct termios raw = *orig_termios;
+    raw.c_lflag &= ~(ICANON | ECHO); 
+    tcsetattr(STDIN_FILENO, TCSAFLUSH, &raw);
+}
+
+// Restore terminal to normal mode
+void disable_raw_mode(struct termios *orig_termios) {
+    tcsetattr(STDIN_FILENO, TCSAFLUSH, orig_termios);
+}
+
+// Function to replace fgets, build the line, and support TAB
+int read_command_with_autocomplete(char *buffer, int max_len) {
+    struct termios orig_termios;
+    enable_raw_mode(&orig_termios);
+
+    int pos = 0;
+    char c;
+
+    while (read(STDIN_FILENO, &c, 1) == 1) {
+        if (c == '\n') {
+            // ENTER pressed
+            buffer[pos] = '\n'; 
+            buffer[pos + 1] = '\0';
+            write(STDOUT_FILENO, "\n", 1);
+            disable_raw_mode(&orig_termios);
+            return 1;
+        } 
+        else if (c == 127 || c == 8) { 
+            // BACKSPACE pressed
+            if (pos > 0) {
+                pos--;
+                write(STDOUT_FILENO, "\b \b", 3);
+            }
+        } 
+        else if (c == '\t') {
+            // TAB pressed - Simple autocompletion
+            buffer[pos] = '\0';
+            const char *match = NULL;
+            int matches = 0;
+
+            for (int i = 0; i < num_builtins; i++) {
+                if (strncmp(builtins[i], buffer, pos) == 0) {
+                    match = builtins[i];
+                    matches++;
+                }
+            }
+
+            // If we have exactly one match (basic implementation supports only built-ins for now)
+            if (matches == 1 && match != NULL) {
+                int remaining_len = strlen(match) - pos;
+                strncpy(&buffer[pos], match + pos, remaining_len);
+                pos += remaining_len;
+                
+                buffer[pos] = ' ';
+                pos++;
+                
+                write(STDOUT_FILENO, match + (pos - remaining_len - 1), remaining_len);
+                write(STDOUT_FILENO, " ", 1);
+            } else {
+                // No match or multiple matches, IGNORE TAB
+            }
+        } 
+        else {
+            // Normal character
+            if (pos < max_len - 2) {
+                buffer[pos++] = c;
+                write(STDOUT_FILENO, &c, 1); // Display it on screen since ECHO is disabled
+            }
+        }
+    }
+
+    disable_raw_mode(&orig_termios);
+    return 0; // EOF (Ctrl+D)
+}
 
 int main(int argc, char *argv[]) {
   char command[1024];
@@ -14,8 +96,10 @@ int main(int argc, char *argv[]) {
     // TODO: Uncomment the code below to pass the first stage
     printf("$ ");
     fflush(stdout);
-    if (fgets(command, sizeof(command), stdin) == NULL) {
-      break;
+    
+    // Replace fgets() with our new custom read function
+    if (!read_command_with_autocomplete(command, sizeof(command))) {
+        break; // If it returns 0, EOF was read
     }
 
     // Remove newline \n
