@@ -257,6 +257,15 @@ int main(int argc, char *argv[]) {
           token_index = 0;
         }
       }
+      else if(c == '|' && !in_quotes_single && !in_quotes_double) {
+        // Handle pipe character
+        if(token_index > 0) {
+          current_token[token_index] = '\0';
+          args[arg_count++] = strdup(current_token);
+          token_index = 0;
+        }
+        args[arg_count++] = strdup("|");
+      }
       else {
         if (in_quotes_double && c == '\\') {
           char next = command[i + 1];
@@ -456,22 +465,114 @@ int main(int argc, char *argv[]) {
   
     //RUN command 
     else {
-
-      pid_t pid = fork();
-      
-      if (pid == 0) {
-        execvp(args[0], args);
-
-        //if we reach here, there was an error executing the command
-        fprintf(stderr, "%s: command not found\n", args[0]);
-        exit(1);
+      // Check if there's a pipe in the arguments
+      int pipe_indices[50];
+      int pipe_count = 0;
+      for (int i = 0; i < arg_count; i++) {
+          if (strcmp(args[i], "|") == 0) {
+              pipe_indices[pipe_count++] = i;
+          }
       }
-      else if (pid > 0 ) {
-        int status;
-        wait(&status);
-      }
+
+      // If there are pipes, handle as pipeline
+      if (pipe_count > 0) {
+          // Split commands into segments based on pipes
+          char **commands[pipe_count + 1];
+          int cmd_indices[pipe_count + 2];
+          cmd_indices[0] = 0;
+          for (int i = 0; i < pipe_count; i++) {
+              cmd_indices[i + 1] = pipe_indices[i];
+          }
+          cmd_indices[pipe_count + 1] = arg_count;
+
+          // Create pipes and execute commands
+          int pipes[pipe_count][2];
+          for (int i = 0; i < pipe_count; i++) {
+              if (pipe(pipes[i]) == -1) {
+                  perror("pipe");
+                  exit(1);
+              }
+          }
+
+          pid_t pids[pipe_count + 1];
+          
+          for (int i = 0; i <= pipe_count; i++) {
+              int cmd_start = cmd_indices[i];
+              int cmd_end = cmd_indices[i + 1];
+              
+              // Skip pipe symbols
+              if (cmd_start < cmd_end && strcmp(args[cmd_start], "|") == 0) {
+                  cmd_start++;
+              }
+              
+              // Create command arguments
+              char *cmd_args[cmd_end - cmd_start + 1];
+              int cmd_arg_count = 0;
+              for (int j = cmd_start; j < cmd_end; j++) {
+                  if (strcmp(args[j], "|") != 0) {
+                      cmd_args[cmd_arg_count++] = args[j];
+                  }
+              }
+              cmd_args[cmd_arg_count] = NULL;
+
+              if (cmd_arg_count == 0) continue;
+
+              pids[i] = fork();
+              if (pids[i] == 0) {
+                  // Redirect stdin from previous pipe (if not first command)
+                  if (i > 0) {
+                      dup2(pipes[i - 1][0], STDIN_FILENO);
+                  }
+                  // Redirect stdout to next pipe (if not last command)
+                  if (i < pipe_count) {
+                      dup2(pipes[i][1], STDOUT_FILENO);
+                  }
+
+                  // Close all pipe file descriptors
+                  for (int j = 0; j < pipe_count; j++) {
+                      close(pipes[j][0]);
+                      close(pipes[j][1]);
+                  }
+
+                  // Execute the command
+                  execvp(cmd_args[0], cmd_args);
+                  fprintf(stderr, "%s: command not found\n", cmd_args[0]);
+                  exit(1);
+              } else if (pids[i] < 0) {
+                  perror("fork");
+                  exit(1);
+              }
+          }
+
+          // Close all pipes in parent process
+          for (int i = 0; i < pipe_count; i++) {
+              close(pipes[i][0]);
+              close(pipes[i][1]);
+          }
+
+          // Wait for all child processes
+          for (int i = 0; i <= pipe_count; i++) {
+              int status;
+              waitpid(pids[i], &status, 0);
+          }
+      } 
       else {
-        perror("Fork failed");
+          // No pipes, execute single command
+          pid_t pid = fork();
+          
+          if (pid == 0) {
+              execvp(args[0], args);
+              //if we reach here, there was an error executing the command
+              fprintf(stderr, "%s: command not found\n", args[0]);
+              exit(1);
+          }
+          else if (pid > 0 ) {
+              int status;
+              wait(&status);
+          }
+          else {
+              perror("Fork failed");
+          }
       }
    } 
    
