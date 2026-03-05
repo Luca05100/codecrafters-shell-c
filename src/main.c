@@ -108,6 +108,7 @@ int main(int argc, char *argv[]) {
     char *output_file = NULL;
     char *error_file = NULL;
     int append_stdout = 0; 
+    int append_stderr = 0; // Added for 2>>
     
     for (int i = 0; i < arg_count; i++) {
         if (strcmp(args[i], ">") == 0 || strcmp(args[i], "1>") == 0) {
@@ -133,6 +134,16 @@ int main(int argc, char *argv[]) {
                 error_file = args[i + 1];
                 args[i] = NULL;
                 arg_count = i;
+                append_stderr = 0; // overwrite
+            }
+            break;
+        }
+        else if (strcmp(args[i], "2>>") == 0) { // Added block for 2>>
+            if (i + 1 < arg_count) {
+                error_file = args[i + 1];
+                args[i] = NULL;
+                arg_count = i;
+                append_stderr = 1; // append
             }
             break;
         }
@@ -155,7 +166,8 @@ int main(int argc, char *argv[]) {
     }
 
     if (error_file != NULL) {
-        int fd_err = open(error_file, O_WRONLY | O_CREAT | O_TRUNC, 0644);
+        int flags_err = O_WRONLY | O_CREAT | (append_stderr ? O_APPEND : O_TRUNC); // Modified to support append
+        int fd_err = open(error_file, flags_err, 0644);
         if (fd_err != -1) {
             saved_stderr = dup(STDERR_FILENO);
             dup2(fd_err, STDERR_FILENO);
