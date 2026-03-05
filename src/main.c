@@ -24,6 +24,11 @@ void disable_raw_mode(struct termios *orig_termios) {
     tcsetattr(STDIN_FILENO, TCSAFLUSH, orig_termios);
 }
 
+// Helper for qsort
+int cmpstringp(const void *p1, const void *p2) {
+   return strcmp(* (char * const *) p1, * (char * const *) p2);
+}
+
 // Function to replace fgets, build the line, and support TAB
 int read_command_with_autocomplete(char *buffer, int max_len) {
     struct termios orig_termios;
@@ -31,6 +36,7 @@ int read_command_with_autocomplete(char *buffer, int max_len) {
 
     int pos = 0;
     char c;
+    int tab_pressed = 0; // Track consecutive tabs
 
     while (read(STDIN_FILENO, &c, 1) == 1) {
         if (c == '\n') {
@@ -43,26 +49,22 @@ int read_command_with_autocomplete(char *buffer, int max_len) {
         } 
         else if (c == 127 || c == 8) { 
             // BACKSPACE pressed
+            tab_pressed = 0;
             if (pos > 0) {
                 pos--;
                 write(STDOUT_FILENO, "\b \b", 3);
             }
         } 
         else if (c == '\t') {
-            // TAB pressed - Search builtins and PATH
             buffer[pos] = '\0';
-            char match_name[1024] = "";
-            int matches = 0;
+            
+            char *matches[1024];
+            int match_count = 0;
 
             // 1. Search in builtins
             for (int i = 0; i < num_builtins; i++) {
                 if (strncmp(builtins[i], buffer, pos) == 0) {
-                    if (matches == 0) {
-                        strcpy(match_name, builtins[i]);
-                        matches++;
-                    } else if (strcmp(match_name, builtins[i]) != 0) {
-                        matches++;
-                    }
+                    matches[match_count++] = strdup(builtins[i]);
                 }
             }
 
@@ -78,12 +80,16 @@ int read_command_with_autocomplete(char *buffer, int max_len) {
                         struct dirent *entry;
                         while ((entry = readdir(dir)) != NULL) {
                             if (strncmp(entry->d_name, buffer, pos) == 0) {
-                                if (matches == 0) {
-                                    strcpy(match_name, entry->d_name);
-                                    matches++;
-                                } 
-                                else if (strcmp(match_name, entry->d_name) != 0) {
-                                    matches++;
+                                // Prevent duplicates
+                                int is_duplicate = 0;
+                                for (int j = 0; j < match_count; j++) {
+                                    if (strcmp(matches[j], entry->d_name) == 0) {
+                                        is_duplicate = 1;
+                                        break;
+                                    }
+                                }
+                                if (!is_duplicate && match_count < 1024) {
+                                    matches[match_count++] = strdup(entry->d_name);
                                 }
                             }
                         }
@@ -94,22 +100,50 @@ int read_command_with_autocomplete(char *buffer, int max_len) {
                 free(path_copy);
             }
 
-            if (matches == 1) {
-                int remaining_len = strlen(match_name) - pos;
-                strncpy(&buffer[pos], match_name + pos, remaining_len);
+            if (match_count == 1) {
+                int remaining_len = strlen(matches[0]) - pos;
+                strncpy(&buffer[pos], matches[0] + pos, remaining_len);
                 pos += remaining_len;
                 
                 buffer[pos] = ' ';
                 pos++;
                 
-                write(STDOUT_FILENO, match_name + (pos - remaining_len - 1), remaining_len);
+                write(STDOUT_FILENO, matches[0] + (pos - remaining_len - 1), remaining_len);
                 write(STDOUT_FILENO, " ", 1);
+                tab_pressed = 0;
+                free(matches[0]);
+            } 
+            else if (match_count > 1) {
+                if (!tab_pressed) {
+                    // First tab: bell
+                    write(STDOUT_FILENO, "\a", 1);
+                    tab_pressed = 1;
+                } else {
+                    // Second tab: sort and print matches
+                    qsort(matches, match_count, sizeof(char *), cmpstringp);
+                    write(STDOUT_FILENO, "\n", 1);
+                    for (int i = 0; i < match_count; i++) {
+                        write(STDOUT_FILENO, matches[i], strlen(matches[i]));
+                        write(STDOUT_FILENO, "  ", 2);
+                    }
+                    write(STDOUT_FILENO, "\n$ ", 3);
+                    write(STDOUT_FILENO, buffer, pos); // Reprint current buffer
+                    tab_pressed = 0;
+                }
+                
+                // Cleanup matches
+                for(int i = 0; i < match_count; i++) {
+                    free(matches[i]);
+                }
             } else {
+                // No matches
                 write(STDOUT_FILENO, "\a", 1);
+                tab_pressed = 0;
             }
         } 
         else {
             // Normal character
+            tab_pressed = 0;
             if (pos < max_len - 2) {
                 buffer[pos++] = c;
                 write(STDOUT_FILENO, &c, 1); 
