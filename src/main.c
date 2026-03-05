@@ -6,6 +6,7 @@
 #include <sys/wait.h>
 #include <fcntl.h>
 #include <termios.h>
+#include <dirent.h> 
 
 // List of builtin commands for autocompletion
 const char *builtins[] = {"echo", "exit", "type", "pwd", "cd"};
@@ -48,44 +49,76 @@ int read_command_with_autocomplete(char *buffer, int max_len) {
             }
         } 
         else if (c == '\t') {
-            // TAB pressed - Simple autocompletion
+            // TAB pressed - Search builtins and PATH
             buffer[pos] = '\0';
-            const char *match = NULL;
+            char match_name[1024] = "";
             int matches = 0;
 
+            // 1. Search in builtins
             for (int i = 0; i < num_builtins; i++) {
                 if (strncmp(builtins[i], buffer, pos) == 0) {
-                    match = builtins[i];
-                    matches++;
+                    if (matches == 0) {
+                        strcpy(match_name, builtins[i]);
+                        matches++;
+                    } else if (strcmp(match_name, builtins[i]) != 0) {
+                        matches++;
+                    }
                 }
             }
 
-            // If we have exactly one match (basic implementation supports only built-ins for now)
-            if (matches == 1 && match != NULL) {
-                int remaining_len = strlen(match) - pos;
-                strncpy(&buffer[pos], match + pos, remaining_len);
+            // 2. Search in PATH for external executables
+            char *path_env = getenv("PATH");
+            if (path_env != NULL) {
+                char *path_copy = strdup(path_env);
+                char *dir_path = strtok(path_copy, ":");
+                
+                while (dir_path != NULL) {
+                    DIR *dir = opendir(dir_path);
+                    if (dir != NULL) {
+                        struct dirent *entry;
+                        while ((entry = readdir(dir)) != NULL) {
+                            if (strncmp(entry->d_name, buffer, pos) == 0) {
+                                if (matches == 0) {
+                                    strcpy(match_name, entry->d_name);
+                                    matches++;
+                                } 
+                                else if (strcmp(match_name, entry->d_name) != 0) {
+                                    matches++;
+                                }
+                            }
+                        }
+                        closedir(dir);
+                    }
+                    dir_path = strtok(NULL, ":");
+                }
+                free(path_copy);
+            }
+
+            if (matches == 1) {
+                int remaining_len = strlen(match_name) - pos;
+                strncpy(&buffer[pos], match_name + pos, remaining_len);
                 pos += remaining_len;
                 
                 buffer[pos] = ' ';
                 pos++;
                 
-                write(STDOUT_FILENO, match + (pos - remaining_len - 1), remaining_len);
+                write(STDOUT_FILENO, match_name + (pos - remaining_len - 1), remaining_len);
                 write(STDOUT_FILENO, " ", 1);
             } else {
-                // No match or multiple matches, IGNORE TAB
+                write(STDOUT_FILENO, "\a", 1);
             }
         } 
         else {
             // Normal character
             if (pos < max_len - 2) {
                 buffer[pos++] = c;
-                write(STDOUT_FILENO, &c, 1); // Display it on screen since ECHO is disabled
+                write(STDOUT_FILENO, &c, 1); 
             }
         }
     }
 
     disable_raw_mode(&orig_termios);
-    return 0; // EOF (Ctrl+D)
+    return 0; 
 }
 
 int main(int argc, char *argv[]) {
