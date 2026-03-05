@@ -107,6 +107,7 @@ int main(int argc, char *argv[]) {
     //Detect redirection
     char *output_file = NULL;
     char *error_file = NULL;
+    int append_stdout = 0; 
     
     for (int i = 0; i < arg_count; i++) {
         if (strcmp(args[i], ">") == 0 || strcmp(args[i], "1>") == 0) {
@@ -114,6 +115,16 @@ int main(int argc, char *argv[]) {
                 output_file = args[i + 1];
                 args[i] = NULL; 
                 arg_count = i;  
+                append_stdout = 0; 
+            }
+            break;
+        }
+        else if (strcmp(args[i], ">>") == 0 || strcmp(args[i], "1>>") == 0) {
+            if (i + 1 < arg_count) {
+                output_file = args[i + 1];
+                args[i] = NULL; 
+                arg_count = i;  
+                append_stdout = 1; 
             }
             break;
         }
@@ -132,7 +143,8 @@ int main(int argc, char *argv[]) {
     int saved_stderr = -1;
 
     if (output_file != NULL) {
-        int fd = open(output_file, O_WRONLY | O_CREAT | O_TRUNC, 0644);
+        int flags = O_WRONLY | O_CREAT | (append_stdout ? O_APPEND : O_TRUNC);
+        int fd = open(output_file, flags, 0644);
         if (fd != -1) {
             saved_stdout = dup(STDOUT_FILENO); 
             dup2(fd, STDOUT_FILENO);           
