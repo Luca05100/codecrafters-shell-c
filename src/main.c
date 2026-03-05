@@ -29,6 +29,22 @@ int cmpstringp(const void *p1, const void *p2) {
    return strcmp(* (char * const *) p1, * (char * const *) p2);
 }
 
+// Helper to find the common prefix of an array of strings
+void get_common_prefix(char **matches, int count, char *out_prefix) {
+    if (count == 0) {
+        out_prefix[0] = '\0';
+        return;
+    }
+    strcpy(out_prefix, matches[0]);
+    for (int i = 1; i < count; i++) {
+        int j = 0;
+        while (out_prefix[j] && matches[i][j] && out_prefix[j] == matches[i][j]) {
+            j++;
+        }
+        out_prefix[j] = '\0';
+    }
+}
+
 // Function to replace fgets, build the line, and support TAB
 int read_command_with_autocomplete(char *buffer, int max_len) {
     struct termios orig_termios;
@@ -111,34 +127,48 @@ int read_command_with_autocomplete(char *buffer, int max_len) {
                 write(STDOUT_FILENO, matches[0] + (pos - remaining_len - 1), remaining_len);
                 write(STDOUT_FILENO, " ", 1);
                 tab_pressed = 0;
-                free(matches[0]);
             } 
             else if (match_count > 1) {
-                if (!tab_pressed) {
-                    // First tab: bell
-                    write(STDOUT_FILENO, "\a", 1);
-                    tab_pressed = 1;
-                } else {
-                    // Second tab: sort and print matches
-                    qsort(matches, match_count, sizeof(char *), cmpstringp);
-                    write(STDOUT_FILENO, "\n", 1);
-                    for (int i = 0; i < match_count; i++) {
-                        write(STDOUT_FILENO, matches[i], strlen(matches[i]));
-                        write(STDOUT_FILENO, "  ", 2);
+                char common_prefix[1024];
+                get_common_prefix(matches, match_count, common_prefix);
+                int prefix_len = strlen(common_prefix);
+
+                // If we can partially complete the word
+                if (prefix_len > pos) {
+                    int add_len = prefix_len - pos;
+                    strncpy(&buffer[pos], common_prefix + pos, add_len);
+                    write(STDOUT_FILENO, common_prefix + pos, add_len);
+                    pos += add_len;
+                    tab_pressed = 0; 
+                } 
+                else {
+                    // No partial completion possible, handle double tab logic
+                    if (!tab_pressed) {
+                        // First tab: bell
+                        write(STDOUT_FILENO, "\a", 1);
+                        tab_pressed = 1;
+                    } else {
+                        // Second tab: sort and print matches
+                        qsort(matches, match_count, sizeof(char *), cmpstringp);
+                        write(STDOUT_FILENO, "\n", 1);
+                        for (int i = 0; i < match_count; i++) {
+                            write(STDOUT_FILENO, matches[i], strlen(matches[i]));
+                            write(STDOUT_FILENO, "  ", 2);
+                        }
+                        write(STDOUT_FILENO, "\n$ ", 3);
+                        write(STDOUT_FILENO, buffer, pos); 
+                        tab_pressed = 0;
                     }
-                    write(STDOUT_FILENO, "\n$ ", 3);
-                    write(STDOUT_FILENO, buffer, pos); // Reprint current buffer
-                    tab_pressed = 0;
-                }
-                
-                // Cleanup matches
-                for(int i = 0; i < match_count; i++) {
-                    free(matches[i]);
                 }
             } else {
                 // No matches
                 write(STDOUT_FILENO, "\a", 1);
                 tab_pressed = 0;
+            }
+            
+            // Cleanup matches
+            for(int i = 0; i < match_count; i++) {
+                free(matches[i]);
             }
         } 
         else {
