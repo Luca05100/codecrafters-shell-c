@@ -106,6 +106,8 @@ int main(int argc, char *argv[]) {
 
     //Detect redirection
     char *output_file = NULL;
+    char *error_file = NULL;
+    
     for (int i = 0; i < arg_count; i++) {
         if (strcmp(args[i], ">") == 0 || strcmp(args[i], "1>") == 0) {
             if (i + 1 < arg_count) {
@@ -115,16 +117,37 @@ int main(int argc, char *argv[]) {
             }
             break;
         }
+        else if (strcmp(args[i], "2>") == 0) {
+            if (i + 1 < arg_count) {
+                error_file = args[i + 1];
+                args[i] = NULL;
+                arg_count = i;
+            }
+            break;
+        }
     }
 
-    // --- PREGATIM FISIERUL DACA AVEM REDIRECTIONARE ---
+    // Prepare redirection files
     int saved_stdout = -1;
+    int saved_stderr = -1;
+
     if (output_file != NULL) {
         int fd = open(output_file, O_WRONLY | O_CREAT | O_TRUNC, 0644);
         if (fd != -1) {
-            saved_stdout = dup(STDOUT_FILENO); // Salvam unde scria inainte (spre monitor)
-            dup2(fd, STDOUT_FILENO);           // Facem ca stdout sa indice catre fisier
-            close(fd);                         // fd vechi nu mai e necesar
+            saved_stdout = dup(STDOUT_FILENO); 
+            dup2(fd, STDOUT_FILENO);           
+            close(fd);                         
+        } else {
+            perror("open error");
+        }
+    }
+
+    if (error_file != NULL) {
+        int fd_err = open(error_file, O_WRONLY | O_CREAT | O_TRUNC, 0644);
+        if (fd_err != -1) {
+            saved_stderr = dup(STDERR_FILENO);
+            dup2(fd_err, STDERR_FILENO);
+            close(fd_err);
         } else {
             perror("open error");
         }
@@ -133,6 +156,7 @@ int main(int argc, char *argv[]) {
     //exit command
     if (strcmp(args[0], "exit") == 0) {
       if (saved_stdout != -1) { dup2(saved_stdout, STDOUT_FILENO); close(saved_stdout); }
+      if (saved_stderr != -1) { dup2(saved_stderr, STDERR_FILENO); close(saved_stderr); }
       exit(0);
       break;
     }
@@ -152,8 +176,8 @@ int main(int argc, char *argv[]) {
     //type command
     else if(strcmp(args[0], "type") == 0) {
       if (arg_count < 2) {
-          // Cleanup daca nu sunt destule argumente
           if (saved_stdout != -1) { dup2(saved_stdout, STDOUT_FILENO); close(saved_stdout); }
+          if (saved_stderr != -1) { dup2(saved_stderr, STDERR_FILENO); close(saved_stderr); }
           continue; 
       }
       char *arg = args[1];
@@ -250,6 +274,10 @@ int main(int argc, char *argv[]) {
    if (saved_stdout != -1) {
        dup2(saved_stdout, STDOUT_FILENO); 
        close(saved_stdout);              
+   }
+   if (saved_stderr != -1) {
+       dup2(saved_stderr, STDERR_FILENO);
+       close(saved_stderr);
    }
 
    //Cleanup memory
