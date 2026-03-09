@@ -4,6 +4,7 @@
 #include <unistd.h>
 #include <sys/types.h>
 #include <sys/wait.h>
+#include <sys/stat.h> // Added for directory checking
 #include <fcntl.h>
 #include <termios.h>
 #include <dirent.h> 
@@ -16,6 +17,15 @@ int last_append_index = 0; // Track the start index for history -a
 // List of builtin commands for autocompletion
 const char *builtins[] = {"echo", "exit", "type", "pwd", "cd", "history"};
 const int num_builtins = 6;
+
+// Function to check if a path is a directory
+int is_directory(const char *path) {
+    struct stat statbuf;
+    if (stat(path, &statbuf) != 0) {
+        return 0;
+    }
+    return S_ISDIR(statbuf.st_mode);
+}
 
 // Function to get the default history file path
 void get_default_history_path(char *path_buffer, size_t size) {
@@ -319,15 +329,22 @@ int read_command_with_autocomplete(char *buffer, int max_len) {
                 }
                 
                 if (match_count == 1) {
+                    // Check if the single match is a directory
+                    char full_path_for_stat[1024];
+                    snprintf(full_path_for_stat, sizeof(full_path_for_stat), "%s/%s", dir_path, matches[0]);
+                    int is_dir = is_directory(full_path_for_stat);
+
                     int remaining_len = strlen(matches[0]) - file_prefix_len;
                     strncpy(&buffer[pos], matches[0] + file_prefix_len, remaining_len);
                     pos += remaining_len;
                     
-                    buffer[pos] = ' ';
+                    // Append '/' for directories, ' ' for files
+                    char append_char = is_dir ? '/' : ' ';
+                    buffer[pos] = append_char;
                     pos++;
                     
                     write(STDOUT_FILENO, matches[0] + file_prefix_len, remaining_len);
-                    write(STDOUT_FILENO, " ", 1);
+                    write(STDOUT_FILENO, &append_char, 1);
                     tab_pressed = 0;
                 } 
                 else if (match_count > 1) {
@@ -335,6 +352,7 @@ int read_command_with_autocomplete(char *buffer, int max_len) {
                     get_common_prefix(matches, match_count, common_prefix);
                     int prefix_len = strlen(common_prefix);
 
+                    // If we can partially complete the word
                     if (prefix_len > file_prefix_len) {
                         int add_len = prefix_len - file_prefix_len;
                         strncpy(&buffer[pos], common_prefix + file_prefix_len, add_len);
@@ -343,10 +361,13 @@ int read_command_with_autocomplete(char *buffer, int max_len) {
                         tab_pressed = 0; 
                     } 
                     else {
+                        // No partial completion possible, handle double tab logic
                         if (!tab_pressed) {
+                            // First tab: bell
                             write(STDOUT_FILENO, "\a", 1);
                             tab_pressed = 1;
                         } else {
+                            // Second tab: sort and print matches
                             qsort(matches, match_count, sizeof(char *), cmpstringp);
                             write(STDOUT_FILENO, "\n", 1);
                             for (int i = 0; i < match_count; i++) {
@@ -359,17 +380,20 @@ int read_command_with_autocomplete(char *buffer, int max_len) {
                         }
                     }
                 } else {
+                    // No matches
                     write(STDOUT_FILENO, "\a", 1);
                     tab_pressed = 0;
                 }
             } else {
-                // --- COMMAND COMPLETION ---
+                // --- COMMAND COMPLETION (No spaces in buffer) ---
+                // 1. Search in builtins
                 for (int i = 0; i < num_builtins; i++) {
                     if (strncmp(builtins[i], buffer, pos) == 0) {
                         matches[match_count++] = strdup(builtins[i]);
                     }
                 }
 
+                // 2. Search in PATH for external executables
                 char *path_env = getenv("PATH");
                 if (path_env != NULL) {
                     char *path_copy = strdup(path_env);
@@ -381,6 +405,7 @@ int read_command_with_autocomplete(char *buffer, int max_len) {
                             struct dirent *entry;
                             while ((entry = readdir(dir)) != NULL) {
                                 if (strncmp(entry->d_name, buffer, pos) == 0) {
+                                    // Prevent duplicates
                                     int is_duplicate = 0;
                                     for (int j = 0; j < match_count; j++) {
                                         if (strcmp(matches[j], entry->d_name) == 0) {
@@ -446,11 +471,13 @@ int read_command_with_autocomplete(char *buffer, int max_len) {
                 }
             }
             
+            // Cleanup matches
             for(int i = 0; i < match_count; i++) {
                 free(matches[i]);
             }
         } 
         else {
+            // Normal character
             tab_pressed = 0;
             if (pos < max_len - 2) {
                 buffer[pos++] = c;
