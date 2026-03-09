@@ -8,9 +8,13 @@
 #include <termios.h>
 #include <dirent.h> 
 
+#define MAX_HISTORY 1000
+char *shell_history[MAX_HISTORY];
+int history_count = 0;
+
 // List of builtin commands for autocompletion
-const char *builtins[] = {"echo", "exit", "type", "pwd", "cd"};
-const int num_builtins = 5;
+const char *builtins[] = {"echo", "exit", "type", "pwd", "cd", "history"};
+const int num_builtins = 6;
 
 // Function to check if a command is a builtin
 int is_builtin(char *cmd) {
@@ -42,6 +46,12 @@ void execute_builtin_in_child(char **args, int arg_count) {
         } else {
             perror("getcwd() error");
         }
+    }
+    else if (strcmp(args[0], "history") == 0) {
+        for (int i = 0; i < history_count; i++) {
+            printf("%5d  %s\n", i + 1, shell_history[i]);
+        }
+        fflush(stdout);
     }
     else if (strcmp(args[0], "type") == 0) {
         if (arg_count < 2) {
@@ -127,8 +137,54 @@ int read_command_with_autocomplete(char *buffer, int max_len) {
     int pos = 0;
     char c;
     int tab_pressed = 0; // Track consecutive tabs
+    int history_index = history_count; // Start at the end of history
 
     while (read(STDIN_FILENO, &c, 1) == 1) {
+        // Handle escape sequences (like Arrow Keys)
+        if (c == '\033') {
+            char seq[2];
+            if (read(STDIN_FILENO, &seq[0], 1) == 0) continue;
+            if (read(STDIN_FILENO, &seq[1], 1) == 0) continue;
+
+            if (seq[0] == '[') {
+                int changed = 0;
+                if (seq[1] == 'A') { // Up arrow
+                    if (history_index > 0) {
+                        history_index--;
+                        changed = 1;
+                    } else {
+                        write(STDOUT_FILENO, "\a", 1); // Bell
+                    }
+                } else if (seq[1] == 'B') { // Down arrow
+                    if (history_index < history_count) {
+                        history_index++;
+                        changed = 1;
+                    } else {
+                        write(STDOUT_FILENO, "\a", 1); // Bell
+                    }
+                }
+
+                if (changed) {
+                    // Clear current line visually
+                    while (pos > 0) {
+                        write(STDOUT_FILENO, "\b \b", 3);
+                        pos--;
+                    }
+                    
+                    // Load line from history
+                    if (history_index < history_count) {
+                        strcpy(buffer, shell_history[history_index]);
+                        pos = strlen(buffer);
+                    } else {
+                        buffer[0] = '\0';
+                        pos = 0;
+                    }
+                    write(STDOUT_FILENO, buffer, pos);
+                }
+            }
+            continue;
+        }
+
         if (c == '\n') {
             // ENTER pressed
             buffer[pos] = '\n'; 
@@ -283,6 +339,11 @@ int main(int argc, char *argv[]) {
     //verify command
     if(len == 0){
       continue;
+    }
+
+    // Add command to history
+    if (history_count < MAX_HISTORY) {
+        shell_history[history_count++] = strdup(command);
     }
 
     //parse commands
@@ -546,6 +607,13 @@ int main(int argc, char *argv[]) {
           printf("\n");
           fflush(stdout); 
         }
+        //history command
+        else if (strcmp(args[0], "history") == 0) {
+          for (int i = 0; i < history_count; i++) {
+              printf("%5d  %s\n", i + 1, shell_history[i]);
+          }
+          fflush(stdout);
+        }
         //type command
         else if(strcmp(args[0], "type") == 0) {
           if (arg_count >= 2) {
@@ -554,7 +622,8 @@ int main(int argc, char *argv[]) {
                  strcmp(arg, "echo") == 0 ||
                  strcmp(arg, "type") == 0 ||
                  strcmp(arg, "pwd") == 0 ||
-                 strcmp(arg, "cd") == 0) {
+                 strcmp(arg, "cd") == 0 ||
+                 strcmp(arg, "history") == 0) {
                 printf("%s is a shell builtin\n", arg);
               } else {
                 char *env = getenv("PATH");
