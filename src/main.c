@@ -209,7 +209,7 @@ int read_command_with_autocomplete(char *buffer, int max_len) {
     int pos = 0;
     char c;
     int tab_pressed = 0; // Track consecutive tabs
-    int history_index = history_count; 
+    int history_index = history_count; // Start at the end of history
 
     while (read(STDIN_FILENO, &c, 1) == 1) {
         // Handle escape sequences (like Arrow Keys)
@@ -278,22 +278,38 @@ int read_command_with_autocomplete(char *buffer, int max_len) {
             char *matches[1024];
             int match_count = 0;
             
-            // Check if we are completing a command or a filename
             char *last_space = strrchr(buffer, ' ');
             
             if (last_space != NULL) {
-                // --- FILENAME COMPLETION ---
-                char *prefix = last_space + 1; 
-                int prefix_len_local = strlen(prefix);
+                // --- FILENAME / PATH COMPLETION ---
+                char *full_word = last_space + 1; 
+                char *last_slash = strrchr(full_word, '/');
                 
-                DIR *dir = opendir(".");
+                char dir_path[1024] = ".";
+                char *file_prefix = full_word;
+                
+                // If there's a slash, split into directory path and file prefix
+                if (last_slash != NULL) {
+                    int dir_len = last_slash - full_word;
+                    if (dir_len > 0) {
+                        strncpy(dir_path, full_word, dir_len);
+                        dir_path[dir_len] = '\0';
+                    } else {
+                        strcpy(dir_path, "/"); // Absolute path from root
+                    }
+                    file_prefix = last_slash + 1;
+                }
+                
+                int file_prefix_len = strlen(file_prefix);
+                
+                DIR *dir = opendir(dir_path);
                 if (dir != NULL) {
                     struct dirent *entry;
                     while ((entry = readdir(dir)) != NULL) {
-                        // Ignore "." and ".." unless explicitly typed
+                        // Ignore "." and ".."
                         if (strcmp(entry->d_name, ".") == 0 || strcmp(entry->d_name, "..") == 0) continue;
                         
-                        if (strncmp(entry->d_name, prefix, prefix_len_local) == 0) {
+                        if (strncmp(entry->d_name, file_prefix, file_prefix_len) == 0) {
                             if (match_count < 1024) {
                                 matches[match_count++] = strdup(entry->d_name);
                             }
@@ -303,14 +319,14 @@ int read_command_with_autocomplete(char *buffer, int max_len) {
                 }
                 
                 if (match_count == 1) {
-                    int remaining_len = strlen(matches[0]) - prefix_len_local;
-                    strncpy(&buffer[pos], matches[0] + prefix_len_local, remaining_len);
+                    int remaining_len = strlen(matches[0]) - file_prefix_len;
+                    strncpy(&buffer[pos], matches[0] + file_prefix_len, remaining_len);
                     pos += remaining_len;
                     
                     buffer[pos] = ' ';
                     pos++;
                     
-                    write(STDOUT_FILENO, matches[0] + prefix_len_local, remaining_len);
+                    write(STDOUT_FILENO, matches[0] + file_prefix_len, remaining_len);
                     write(STDOUT_FILENO, " ", 1);
                     tab_pressed = 0;
                 } 
@@ -319,10 +335,10 @@ int read_command_with_autocomplete(char *buffer, int max_len) {
                     get_common_prefix(matches, match_count, common_prefix);
                     int prefix_len = strlen(common_prefix);
 
-                    if (prefix_len > prefix_len_local) {
-                        int add_len = prefix_len - prefix_len_local;
-                        strncpy(&buffer[pos], common_prefix + prefix_len_local, add_len);
-                        write(STDOUT_FILENO, common_prefix + prefix_len_local, add_len);
+                    if (prefix_len > file_prefix_len) {
+                        int add_len = prefix_len - file_prefix_len;
+                        strncpy(&buffer[pos], common_prefix + file_prefix_len, add_len);
+                        write(STDOUT_FILENO, common_prefix + file_prefix_len, add_len);
                         pos += add_len;
                         tab_pressed = 0; 
                     } 
@@ -346,17 +362,14 @@ int read_command_with_autocomplete(char *buffer, int max_len) {
                     write(STDOUT_FILENO, "\a", 1);
                     tab_pressed = 0;
                 }
-                
             } else {
-                // --- COMMAND COMPLETION (No spaces in buffer) ---
-                // 1. Search in builtins
+                // --- COMMAND COMPLETION ---
                 for (int i = 0; i < num_builtins; i++) {
                     if (strncmp(builtins[i], buffer, pos) == 0) {
                         matches[match_count++] = strdup(builtins[i]);
                     }
                 }
 
-                // 2. Search in PATH for external executables
                 char *path_env = getenv("PATH");
                 if (path_env != NULL) {
                     char *path_copy = strdup(path_env);
@@ -433,13 +446,11 @@ int read_command_with_autocomplete(char *buffer, int max_len) {
                 }
             }
             
-            // Cleanup matches
             for(int i = 0; i < match_count; i++) {
                 free(matches[i]);
             }
         } 
         else {
-            // Normal character
             tab_pressed = 0;
             if (pos < max_len - 2) {
                 buffer[pos++] = c;
