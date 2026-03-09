@@ -48,7 +48,15 @@ void execute_builtin_in_child(char **args, int arg_count) {
         }
     }
     else if (strcmp(args[0], "history") == 0) {
-        for (int i = 0; i < history_count; i++) {
+        // Handle optional limit argument
+        int start_idx = 0;
+        if (arg_count > 1) {
+            int limit = atoi(args[1]);
+            if (limit > 0 && limit < history_count) {
+                start_idx = history_count - limit;
+            }
+        }
+        for (int i = start_idx; i < history_count; i++) {
             printf("%5d  %s\n", i + 1, shell_history[i]);
         }
         fflush(stdout);
@@ -341,9 +349,15 @@ int main(int argc, char *argv[]) {
       continue;
     }
 
-    // Add command to history
+    // Add command to history with shifting if full
     if (history_count < MAX_HISTORY) {
         shell_history[history_count++] = strdup(command);
+    } else {
+        free(shell_history[0]);
+        for (int i = 1; i < MAX_HISTORY; i++) {
+            shell_history[i - 1] = shell_history[i];
+        }
+        shell_history[MAX_HISTORY - 1] = strdup(command);
     }
 
     //parse commands
@@ -609,7 +623,15 @@ int main(int argc, char *argv[]) {
         }
         //history command
         else if (strcmp(args[0], "history") == 0) {
-          for (int i = 0; i < history_count; i++) {
+          // Handle optional limit argument
+          int start_idx = 0;
+          if (arg_count > 1) {
+              int limit = atoi(args[1]);
+              if (limit > 0 && limit < history_count) {
+                  start_idx = history_count - limit;
+              }
+          }
+          for (int i = start_idx; i < history_count; i++) {
               printf("%5d  %s\n", i + 1, shell_history[i]);
           }
           fflush(stdout);
