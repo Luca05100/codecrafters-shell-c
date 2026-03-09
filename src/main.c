@@ -26,6 +26,21 @@ int is_builtin(char *cmd) {
     return 0;
 }
 
+// Function to load history from a specific path
+void load_history_from_file(const char *path) {
+    FILE *file = fopen(path, "r");
+    if (!file) return;
+    char line[1024];
+    while (fgets(line, sizeof(line), file) && history_count < MAX_HISTORY) {
+        int len = strlen(line);
+        if (len > 0 && line[len - 1] == '\n') line[len - 1] = '\0';
+        if (strlen(line) > 0) {
+            shell_history[history_count++] = strdup(line);
+        }
+    }
+    fclose(file);
+}
+
 // Function to execute builtin commands in a child process (for pipelines)
 void execute_builtin_in_child(char **args, int arg_count) {
     if (strcmp(args[0], "echo") == 0) {
@@ -48,18 +63,22 @@ void execute_builtin_in_child(char **args, int arg_count) {
         }
     }
     else if (strcmp(args[0], "history") == 0) {
-        // Handle optional limit argument
-        int start_idx = 0;
-        if (arg_count > 1) {
-            int limit = atoi(args[1]);
-            if (limit > 0 && limit < history_count) {
-                start_idx = history_count - limit;
+        if (arg_count >= 3 && strcmp(args[1], "-r") == 0) {
+            load_history_from_file(args[2]);
+        } else {
+            // Handle optional limit argument
+            int start_idx = 0;
+            if (arg_count > 1) {
+                int limit = atoi(args[1]);
+                if (limit > 0 && limit < history_count) {
+                    start_idx = history_count - limit;
+                }
             }
+            for (int i = start_idx; i < history_count; i++) {
+                printf("%5d  %s\n", i + 1, shell_history[i]);
+            }
+            fflush(stdout);
         }
-        for (int i = start_idx; i < history_count; i++) {
-            printf("%5d  %s\n", i + 1, shell_history[i]);
-        }
-        fflush(stdout);
     }
     else if (strcmp(args[0], "type") == 0) {
         if (arg_count < 2) {
@@ -101,7 +120,6 @@ void execute_builtin_in_child(char **args, int arg_count) {
             }
         }
     }
-    // Note: cd and exit don't make sense in child pipelines, so we skip them
 }
 
 void enable_raw_mode(struct termios *orig_termios) {
@@ -195,8 +213,7 @@ int read_command_with_autocomplete(char *buffer, int max_len) {
 
         if (c == '\n') {
             // ENTER pressed
-            buffer[pos] = '\n'; 
-            buffer[pos + 1] = '\0';
+            buffer[pos] = '\0'; 
             write(STDOUT_FILENO, "\n", 1);
             disable_raw_mode(&orig_termios);
             return 1;
@@ -328,7 +345,6 @@ int main(int argc, char *argv[]) {
   setbuf(stdout, NULL);
   
   while(1) {
-    // TODO: Uncomment the code below to pass the first stage
     printf("$ ");
     fflush(stdout);
     
@@ -337,14 +353,8 @@ int main(int argc, char *argv[]) {
         break; // If it returns 0, EOF was read
     }
 
-    // Remove newline \n
-    int len = strlen(command);
-    if (len > 0 && command[len - 1] == '\n') {
-      command[len - 1] = '\0';
-      len--; 
-    }
-
     //verify command
+    int len = strlen(command);
     if(len == 0){
       continue;
     }
@@ -442,78 +452,9 @@ int main(int argc, char *argv[]) {
 
     // Save the original argument count before any modifications for redirection, so we can free memory correctly later
     int original_arg_count = arg_count;
-
-    //Detect redirection
-    char *output_file = NULL;
-    char *error_file = NULL;
-    int append_stdout = 0; 
-    int append_stderr = 0; // Added for 2>>
-    
+    char *original_args[100];
     for (int i = 0; i < arg_count; i++) {
-        if (strcmp(args[i], ">") == 0 || strcmp(args[i], "1>") == 0) {
-            if (i + 1 < arg_count) {
-                output_file = args[i + 1];
-                args[i] = NULL; 
-                arg_count = i;  
-                append_stdout = 0; 
-            }
-            break;
-        }
-        else if (strcmp(args[i], ">>") == 0 || strcmp(args[i], "1>>") == 0) {
-            if (i + 1 < arg_count) {
-                output_file = args[i + 1];
-                args[i] = NULL; 
-                arg_count = i;  
-                append_stdout = 1; 
-            }
-            break;
-        }
-        else if (strcmp(args[i], "2>") == 0) {
-            if (i + 1 < arg_count) {
-                error_file = args[i + 1];
-                args[i] = NULL;
-                arg_count = i;
-                append_stderr = 0; // overwrite
-            }
-            break;
-        }
-        else if (strcmp(args[i], "2>>") == 0) { // Added block for 2>>
-            if (i + 1 < arg_count) {
-                error_file = args[i + 1];
-                args[i] = NULL;
-                arg_count = i;
-                append_stderr = 1; // append
-            }
-            break;
-        }
-    }
-
-    // Prepare redirection files
-    int saved_stdout = -1;
-    int saved_stderr = -1;
-
-    if (output_file != NULL) {
-        int flags = O_WRONLY | O_CREAT | (append_stdout ? O_APPEND : O_TRUNC);
-        int fd = open(output_file, flags, 0644);
-        if (fd != -1) {
-            saved_stdout = dup(STDOUT_FILENO); 
-            dup2(fd, STDOUT_FILENO);           
-            close(fd);                         
-        } else {
-            perror("open error");
-        }
-    }
-
-    if (error_file != NULL) {
-        int flags_err = O_WRONLY | O_CREAT | (append_stderr ? O_APPEND : O_TRUNC); // Modified to support append
-        int fd_err = open(error_file, flags_err, 0644);
-        if (fd_err != -1) {
-            saved_stderr = dup(STDERR_FILENO);
-            dup2(fd_err, STDERR_FILENO);
-            close(fd_err);
-        } else {
-            perror("open error");
-        }
+        original_args[i] = args[i];
     }
 
     // --- PIPELINE DETECTION ---
@@ -603,7 +544,80 @@ int main(int argc, char *argv[]) {
     } 
     else {
         // --- SINGLE COMMAND EXECUTION ---
+
+        //Detect redirection for single commands
+        char *output_file = NULL;
+        char *error_file = NULL;
+        int append_stdout = 0; 
+        int append_stderr = 0; 
         
+        for (int i = 0; i < arg_count; i++) {
+            if (strcmp(args[i], ">") == 0 || strcmp(args[i], "1>") == 0) {
+                if (i + 1 < arg_count) {
+                    output_file = args[i + 1];
+                    args[i] = NULL; 
+                    arg_count = i;  
+                    append_stdout = 0; 
+                }
+                break;
+            }
+            else if (strcmp(args[i], ">>") == 0 || strcmp(args[i], "1>>") == 0) {
+                if (i + 1 < arg_count) {
+                    output_file = args[i + 1];
+                    args[i] = NULL; 
+                    arg_count = i;  
+                    append_stdout = 1; 
+                }
+                break;
+            }
+            else if (strcmp(args[i], "2>") == 0) {
+                if (i + 1 < arg_count) {
+                    error_file = args[i + 1];
+                    args[i] = NULL;
+                    arg_count = i;
+                    append_stderr = 0; 
+                }
+                break;
+            }
+            else if (strcmp(args[i], "2>>") == 0) { 
+                if (i + 1 < arg_count) {
+                    error_file = args[i + 1];
+                    args[i] = NULL;
+                    arg_count = i;
+                    append_stderr = 1; 
+                }
+                break;
+            }
+        }
+
+        // Prepare redirection files
+        int saved_stdout = -1;
+        int saved_stderr = -1;
+
+        if (output_file != NULL) {
+            int flags = O_WRONLY | O_CREAT | (append_stdout ? O_APPEND : O_TRUNC);
+            int fd = open(output_file, flags, 0644);
+            if (fd != -1) {
+                saved_stdout = dup(STDOUT_FILENO); 
+                dup2(fd, STDOUT_FILENO);           
+                close(fd);                         
+            } else {
+                perror("open error");
+            }
+        }
+
+        if (error_file != NULL) {
+            int flags_err = O_WRONLY | O_CREAT | (append_stderr ? O_APPEND : O_TRUNC); 
+            int fd_err = open(error_file, flags_err, 0644);
+            if (fd_err != -1) {
+                saved_stderr = dup(STDERR_FILENO);
+                dup2(fd_err, STDERR_FILENO);
+                close(fd_err);
+            } else {
+                perror("open error");
+            }
+        }
+
         //exit command
         if (strcmp(args[0], "exit") == 0) {
           if (saved_stdout != -1) { dup2(saved_stdout, STDOUT_FILENO); close(saved_stdout); }
@@ -623,29 +637,27 @@ int main(int argc, char *argv[]) {
         }
         //history command
         else if (strcmp(args[0], "history") == 0) {
-          // Handle optional limit argument
-          int start_idx = 0;
-          if (arg_count > 1) {
-              int limit = atoi(args[1]);
-              if (limit > 0 && limit < history_count) {
-                  start_idx = history_count - limit;
+          if (arg_count >= 3 && strcmp(args[1], "-r") == 0) {
+              load_history_from_file(args[2]);
+          } else {
+              int start_idx = 0;
+              if (arg_count > 1) {
+                  int limit = atoi(args[1]);
+                  if (limit > 0 && limit < history_count) {
+                      start_idx = history_count - limit;
+                  }
               }
+              for (int i = start_idx; i < history_count; i++) {
+                  printf("%5d  %s\n", i + 1, shell_history[i]);
+              }
+              fflush(stdout);
           }
-          for (int i = start_idx; i < history_count; i++) {
-              printf("%5d  %s\n", i + 1, shell_history[i]);
-          }
-          fflush(stdout);
         }
         //type command
         else if(strcmp(args[0], "type") == 0) {
           if (arg_count >= 2) {
               char *arg = args[1];
-              if(strcmp(arg, "exit") == 0 ||
-                 strcmp(arg, "echo") == 0 ||
-                 strcmp(arg, "type") == 0 ||
-                 strcmp(arg, "pwd") == 0 ||
-                 strcmp(arg, "cd") == 0 ||
-                 strcmp(arg, "history") == 0) {
+              if(is_builtin(arg)) {
                 printf("%s is a shell builtin\n", arg);
               } else {
                 char *env = getenv("PATH");
@@ -720,21 +732,21 @@ int main(int argc, char *argv[]) {
             perror("Fork failed");
           }
         }
+
+        //restore terminal
+        if (saved_stdout != -1) {
+            dup2(saved_stdout, STDOUT_FILENO); 
+            close(saved_stdout);              
+        }
+        if (saved_stderr != -1) {
+            dup2(saved_stderr, STDERR_FILENO);
+            close(saved_stderr);
+        }
     }
    
-    //restore terminal
-    if (saved_stdout != -1) {
-        dup2(saved_stdout, STDOUT_FILENO); 
-        close(saved_stdout);              
-    }
-    if (saved_stderr != -1) {
-        dup2(saved_stderr, STDERR_FILENO);
-        close(saved_stderr);
-    }
-
     //Cleanup memory
     for(int i=0; i < original_arg_count; i++) {
-        if (args[i] != NULL) free(args[i]);
+        if (original_args[i] != NULL) free(original_args[i]);
     }
 
   }
