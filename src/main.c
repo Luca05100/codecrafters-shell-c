@@ -11,6 +11,7 @@
 #define MAX_HISTORY 1000
 char *shell_history[MAX_HISTORY];
 int history_count = 0;
+int last_append_index = 0; // Track the start index for history -a
 
 // List of builtin commands for autocompletion
 const char *builtins[] = {"echo", "exit", "type", "pwd", "cd", "history"};
@@ -41,7 +42,7 @@ void load_history_from_file(const char *path) {
     fclose(file);
 }
 
-// Function to write history to a specific path
+// Function to write history to a specific path (overwrite)
 void write_history_to_file(const char *path) {
     FILE *file = fopen(path, "w");
     if (!file) return;
@@ -49,6 +50,17 @@ void write_history_to_file(const char *path) {
         fprintf(file, "%s\n", shell_history[i]);
     }
     fclose(file);
+}
+
+// Function to append new history to a specific path
+void append_history_to_file(const char *path) {
+    FILE *file = fopen(path, "a");
+    if (!file) return;
+    for (int i = last_append_index; i < history_count; i++) {
+        fprintf(file, "%s\n", shell_history[i]);
+    }
+    fclose(file);
+    last_append_index = history_count; // Update index after appending
 }
 
 // Function to execute builtin commands in a child process (for pipelines)
@@ -77,6 +89,8 @@ void execute_builtin_in_child(char **args, int arg_count) {
             load_history_from_file(args[2]);
         } else if (arg_count >= 3 && strcmp(args[1], "-w") == 0) {
             write_history_to_file(args[2]);
+        } else if (arg_count >= 3 && strcmp(args[1], "-a") == 0) {
+            append_history_to_file(args[2]);
         } else {
             // Handle optional limit argument
             int start_idx = 0;
@@ -380,6 +394,7 @@ int main(int argc, char *argv[]) {
             shell_history[i - 1] = shell_history[i];
         }
         shell_history[MAX_HISTORY - 1] = strdup(command);
+        if (last_append_index > 0) last_append_index--; // Shift index to keep track correctly
     }
 
     //parse commands
@@ -470,7 +485,6 @@ int main(int argc, char *argv[]) {
     }
 
     // --- PIPELINE DETECTION ---
-    // Moved above built-in execution so pipes intercept commands first
     int pipe_indices[50];
     int pipe_count = 0;
     for (int i = 0; i < arg_count; i++) {
@@ -555,7 +569,7 @@ int main(int argc, char *argv[]) {
         }
     } 
     else {
-        // --- SINGLE COMMAND EXECUTION ---
+        // SINGLE COMMAND EXECUTION
 
         //Detect redirection for single commands
         char *output_file = NULL;
@@ -653,6 +667,8 @@ int main(int argc, char *argv[]) {
               load_history_from_file(args[2]);
           } else if (arg_count >= 3 && strcmp(args[1], "-w") == 0) {
               write_history_to_file(args[2]);
+          } else if (arg_count >= 3 && strcmp(args[1], "-a") == 0) {
+              append_history_to_file(args[2]);
           } else {
               int start_idx = 0;
               if (arg_count > 1) {
