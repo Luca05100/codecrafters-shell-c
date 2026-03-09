@@ -235,14 +235,14 @@ int read_command_with_autocomplete(char *buffer, int max_len) {
                         history_index--;
                         changed = 1;
                     } else {
-                        write(STDOUT_FILENO, "\a", 1); // Bell
+                        write(STDOUT_FILENO, "\x07", 1); // Bell
                     }
                 } else if (seq[1] == 'B') { // Down arrow
                     if (history_index < history_count) {
                         history_index++;
                         changed = 1;
                     } else {
-                        write(STDOUT_FILENO, "\a", 1); // Bell
+                        write(STDOUT_FILENO, "\x07", 1); // Bell
                     }
                 }
 
@@ -329,7 +329,7 @@ int read_command_with_autocomplete(char *buffer, int max_len) {
                 }
                 
                 if (match_count == 1) {
-                    // Check if the single match is a directory
+                    // Check if the match is a directory
                     char full_path_for_stat[1024];
                     snprintf(full_path_for_stat, sizeof(full_path_for_stat), "%s/%s", dir_path, matches[0]);
                     int is_dir = is_directory(full_path_for_stat);
@@ -364,7 +364,7 @@ int read_command_with_autocomplete(char *buffer, int max_len) {
                         // No partial completion possible, handle double tab logic
                         if (!tab_pressed) {
                             // First tab: bell
-                            write(STDOUT_FILENO, "\a", 1);
+                            write(STDOUT_FILENO, "\x07", 1);
                             tab_pressed = 1;
                         } else {
                             // Second tab: sort and print matches
@@ -372,6 +372,14 @@ int read_command_with_autocomplete(char *buffer, int max_len) {
                             write(STDOUT_FILENO, "\n", 1);
                             for (int i = 0; i < match_count; i++) {
                                 write(STDOUT_FILENO, matches[i], strlen(matches[i]));
+                                
+                                // Print trailing slash if it is a directory
+                                char full_path_for_stat[1024];
+                                snprintf(full_path_for_stat, sizeof(full_path_for_stat), "%s/%s", dir_path, matches[i]);
+                                if (is_directory(full_path_for_stat)) {
+                                    write(STDOUT_FILENO, "/", 1);
+                                }
+                                
                                 write(STDOUT_FILENO, "  ", 2);
                             }
                             write(STDOUT_FILENO, "\n$ ", 3);
@@ -381,7 +389,7 @@ int read_command_with_autocomplete(char *buffer, int max_len) {
                     }
                 } else {
                     // No matches
-                    write(STDOUT_FILENO, "\a", 1);
+                    write(STDOUT_FILENO, "\x07", 1);
                     tab_pressed = 0;
                 }
             } else {
@@ -451,7 +459,7 @@ int read_command_with_autocomplete(char *buffer, int max_len) {
                     } 
                     else {
                         if (!tab_pressed) {
-                            write(STDOUT_FILENO, "\a", 1);
+                            write(STDOUT_FILENO, "\x07", 1);
                             tab_pressed = 1;
                         } else {
                             qsort(matches, match_count, sizeof(char *), cmpstringp);
@@ -466,7 +474,7 @@ int read_command_with_autocomplete(char *buffer, int max_len) {
                         }
                     }
                 } else {
-                    write(STDOUT_FILENO, "\a", 1);
+                    write(STDOUT_FILENO, "\x07", 1);
                     tab_pressed = 0;
                 }
             }
