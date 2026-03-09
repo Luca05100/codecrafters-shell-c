@@ -17,6 +17,25 @@ int last_append_index = 0; // Track the start index for history -a
 const char *builtins[] = {"echo", "exit", "type", "pwd", "cd", "history"};
 const int num_builtins = 6;
 
+// Function to get the default history file path
+void get_default_history_path(char *path_buffer, size_t size) {
+    // Check HISTFILE environment variable first
+    char *histfile = getenv("HISTFILE");
+    if (histfile != NULL && strlen(histfile) > 0) {
+        strncpy(path_buffer, histfile, size - 1);
+        path_buffer[size - 1] = '\0';
+        return;
+    }
+    
+    // Fallback to ~/.shell_history if HISTFILE is not set
+    char *home = getenv("HOME");
+    if (home) {
+        snprintf(path_buffer, size, "%s/.shell_history", home);
+    } else {
+        strcpy(path_buffer, ".shell_history");
+    }
+}
+
 // Function to check if a command is a builtin
 int is_builtin(char *cmd) {
     for (int i = 0; i < num_builtins; i++) {
@@ -40,6 +59,7 @@ void load_history_from_file(const char *path) {
         }
     }
     fclose(file);
+    last_append_index = history_count; // Sync append index when loading
 }
 
 // Function to write history to a specific path (overwrite)
@@ -370,13 +390,20 @@ int main(int argc, char *argv[]) {
   char command[1024];
   setbuf(stdout, NULL);
   
+  // Read history on startup based on HISTFILE
+  char default_history_path[1024];
+  get_default_history_path(default_history_path, sizeof(default_history_path));
+  load_history_from_file(default_history_path);
+
   while(1) {
     printf("$ ");
     fflush(stdout);
     
     // Replace fgets() with our new custom read function
     if (!read_command_with_autocomplete(command, sizeof(command))) {
-        break; // If it returns 0, EOF was read
+        // EOF encountered (Ctrl+D), write history before exiting
+        write_history_to_file(default_history_path);
+        break; 
     }
 
     //verify command
@@ -569,7 +596,7 @@ int main(int argc, char *argv[]) {
         }
     } 
     else {
-        // SINGLE COMMAND EXECUTION
+        // --- SINGLE COMMAND EXECUTION ---
 
         //Detect redirection for single commands
         char *output_file = NULL;
@@ -648,6 +675,8 @@ int main(int argc, char *argv[]) {
         if (strcmp(args[0], "exit") == 0) {
           if (saved_stdout != -1) { dup2(saved_stdout, STDOUT_FILENO); close(saved_stdout); }
           if (saved_stderr != -1) { dup2(saved_stderr, STDERR_FILENO); close(saved_stderr); }
+          // Write history before exiting on standard 'exit' command
+          write_history_to_file(default_history_path);
           exit(0);
         }
         //echo command
