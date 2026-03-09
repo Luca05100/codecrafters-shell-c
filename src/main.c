@@ -41,6 +41,16 @@ void load_history_from_file(const char *path) {
     fclose(file);
 }
 
+// Function to write history to a specific path
+void write_history_to_file(const char *path) {
+    FILE *file = fopen(path, "w");
+    if (!file) return;
+    for (int i = 0; i < history_count; i++) {
+        fprintf(file, "%s\n", shell_history[i]);
+    }
+    fclose(file);
+}
+
 // Function to execute builtin commands in a child process (for pipelines)
 void execute_builtin_in_child(char **args, int arg_count) {
     if (strcmp(args[0], "echo") == 0) {
@@ -65,6 +75,8 @@ void execute_builtin_in_child(char **args, int arg_count) {
     else if (strcmp(args[0], "history") == 0) {
         if (arg_count >= 3 && strcmp(args[1], "-r") == 0) {
             load_history_from_file(args[2]);
+        } else if (arg_count >= 3 && strcmp(args[1], "-w") == 0) {
+            write_history_to_file(args[2]);
         } else {
             // Handle optional limit argument
             int start_idx = 0;
@@ -639,6 +651,8 @@ int main(int argc, char *argv[]) {
         else if (strcmp(args[0], "history") == 0) {
           if (arg_count >= 3 && strcmp(args[1], "-r") == 0) {
               load_history_from_file(args[2]);
+          } else if (arg_count >= 3 && strcmp(args[1], "-w") == 0) {
+              write_history_to_file(args[2]);
           } else {
               int start_idx = 0;
               if (arg_count > 1) {
