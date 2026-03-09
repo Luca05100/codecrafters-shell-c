@@ -209,7 +209,7 @@ int read_command_with_autocomplete(char *buffer, int max_len) {
     int pos = 0;
     char c;
     int tab_pressed = 0; // Track consecutive tabs
-    int history_index = history_count; // Start at the end of history
+    int history_index = history_count; 
 
     while (read(STDIN_FILENO, &c, 1) == 1) {
         // Handle escape sequences (like Arrow Keys)
@@ -277,94 +277,160 @@ int read_command_with_autocomplete(char *buffer, int max_len) {
             
             char *matches[1024];
             int match_count = 0;
-
-            // 1. Search in builtins
-            for (int i = 0; i < num_builtins; i++) {
-                if (strncmp(builtins[i], buffer, pos) == 0) {
-                    matches[match_count++] = strdup(builtins[i]);
-                }
-            }
-
-            // 2. Search in PATH for external executables
-            char *path_env = getenv("PATH");
-            if (path_env != NULL) {
-                char *path_copy = strdup(path_env);
-                char *dir_path = strtok(path_copy, ":");
+            
+            // Check if we are completing a command or a filename
+            char *last_space = strrchr(buffer, ' ');
+            
+            if (last_space != NULL) {
+                // --- FILENAME COMPLETION ---
+                char *prefix = last_space + 1; 
+                int prefix_len_local = strlen(prefix);
                 
-                while (dir_path != NULL) {
-                    DIR *dir = opendir(dir_path);
-                    if (dir != NULL) {
-                        struct dirent *entry;
-                        while ((entry = readdir(dir)) != NULL) {
-                            if (strncmp(entry->d_name, buffer, pos) == 0) {
-                                // Prevent duplicates
-                                int is_duplicate = 0;
-                                for (int j = 0; j < match_count; j++) {
-                                    if (strcmp(matches[j], entry->d_name) == 0) {
-                                        is_duplicate = 1;
-                                        break;
-                                    }
-                                }
-                                if (!is_duplicate && match_count < 1024) {
-                                    matches[match_count++] = strdup(entry->d_name);
-                                }
+                DIR *dir = opendir(".");
+                if (dir != NULL) {
+                    struct dirent *entry;
+                    while ((entry = readdir(dir)) != NULL) {
+                        // Ignore "." and ".." unless explicitly typed
+                        if (strcmp(entry->d_name, ".") == 0 || strcmp(entry->d_name, "..") == 0) continue;
+                        
+                        if (strncmp(entry->d_name, prefix, prefix_len_local) == 0) {
+                            if (match_count < 1024) {
+                                matches[match_count++] = strdup(entry->d_name);
                             }
                         }
-                        closedir(dir);
                     }
-                    dir_path = strtok(NULL, ":");
+                    closedir(dir);
                 }
-                free(path_copy);
-            }
-
-            if (match_count == 1) {
-                int remaining_len = strlen(matches[0]) - pos;
-                strncpy(&buffer[pos], matches[0] + pos, remaining_len);
-                pos += remaining_len;
                 
-                buffer[pos] = ' ';
-                pos++;
-                
-                write(STDOUT_FILENO, matches[0] + (pos - remaining_len - 1), remaining_len);
-                write(STDOUT_FILENO, " ", 1);
-                tab_pressed = 0;
-            } 
-            else if (match_count > 1) {
-                char common_prefix[1024];
-                get_common_prefix(matches, match_count, common_prefix);
-                int prefix_len = strlen(common_prefix);
-
-                // If we can partially complete the word
-                if (prefix_len > pos) {
-                    int add_len = prefix_len - pos;
-                    strncpy(&buffer[pos], common_prefix + pos, add_len);
-                    write(STDOUT_FILENO, common_prefix + pos, add_len);
-                    pos += add_len;
-                    tab_pressed = 0; 
+                if (match_count == 1) {
+                    int remaining_len = strlen(matches[0]) - prefix_len_local;
+                    strncpy(&buffer[pos], matches[0] + prefix_len_local, remaining_len);
+                    pos += remaining_len;
+                    
+                    buffer[pos] = ' ';
+                    pos++;
+                    
+                    write(STDOUT_FILENO, matches[0] + prefix_len_local, remaining_len);
+                    write(STDOUT_FILENO, " ", 1);
+                    tab_pressed = 0;
                 } 
-                else {
-                    // No partial completion possible, handle double tab logic
-                    if (!tab_pressed) {
-                        // First tab: bell
-                        write(STDOUT_FILENO, "\a", 1);
-                        tab_pressed = 1;
-                    } else {
-                        // Second tab: sort and print matches
-                        qsort(matches, match_count, sizeof(char *), cmpstringp);
-                        write(STDOUT_FILENO, "\n", 1);
-                        for (int i = 0; i < match_count; i++) {
-                            write(STDOUT_FILENO, matches[i], strlen(matches[i]));
-                            write(STDOUT_FILENO, "  ", 2);
+                else if (match_count > 1) {
+                    char common_prefix[1024];
+                    get_common_prefix(matches, match_count, common_prefix);
+                    int prefix_len = strlen(common_prefix);
+
+                    if (prefix_len > prefix_len_local) {
+                        int add_len = prefix_len - prefix_len_local;
+                        strncpy(&buffer[pos], common_prefix + prefix_len_local, add_len);
+                        write(STDOUT_FILENO, common_prefix + prefix_len_local, add_len);
+                        pos += add_len;
+                        tab_pressed = 0; 
+                    } 
+                    else {
+                        if (!tab_pressed) {
+                            write(STDOUT_FILENO, "\a", 1);
+                            tab_pressed = 1;
+                        } else {
+                            qsort(matches, match_count, sizeof(char *), cmpstringp);
+                            write(STDOUT_FILENO, "\n", 1);
+                            for (int i = 0; i < match_count; i++) {
+                                write(STDOUT_FILENO, matches[i], strlen(matches[i]));
+                                write(STDOUT_FILENO, "  ", 2);
+                            }
+                            write(STDOUT_FILENO, "\n$ ", 3);
+                            write(STDOUT_FILENO, buffer, pos); 
+                            tab_pressed = 0;
                         }
-                        write(STDOUT_FILENO, "\n$ ", 3);
-                        write(STDOUT_FILENO, buffer, pos); 
-                        tab_pressed = 0;
+                    }
+                } else {
+                    write(STDOUT_FILENO, "\a", 1);
+                    tab_pressed = 0;
+                }
+                
+            } else {
+                // --- COMMAND COMPLETION (No spaces in buffer) ---
+                // 1. Search in builtins
+                for (int i = 0; i < num_builtins; i++) {
+                    if (strncmp(builtins[i], buffer, pos) == 0) {
+                        matches[match_count++] = strdup(builtins[i]);
                     }
                 }
-            } else {
-                // No matches
-                write(STDOUT_FILENO, "\a", 1);
-                tab_pressed = 0;
+
+                // 2. Search in PATH for external executables
+                char *path_env = getenv("PATH");
+                if (path_env != NULL) {
+                    char *path_copy = strdup(path_env);
+                    char *dir_path = strtok(path_copy, ":");
+                    
+                    while (dir_path != NULL) {
+                        DIR *dir = opendir(dir_path);
+                        if (dir != NULL) {
+                            struct dirent *entry;
+                            while ((entry = readdir(dir)) != NULL) {
+                                if (strncmp(entry->d_name, buffer, pos) == 0) {
+                                    int is_duplicate = 0;
+                                    for (int j = 0; j < match_count; j++) {
+                                        if (strcmp(matches[j], entry->d_name) == 0) {
+                                            is_duplicate = 1;
+                                            break;
+                                        }
+                                    }
+                                    if (!is_duplicate && match_count < 1024) {
+                                        matches[match_count++] = strdup(entry->d_name);
+                                    }
+                                }
+                            }
+                            closedir(dir);
+                        }
+                        dir_path = strtok(NULL, ":");
+                    }
+                    free(path_copy);
+                }
+
+                if (match_count == 1) {
+                    int remaining_len = strlen(matches[0]) - pos;
+                    strncpy(&buffer[pos], matches[0] + pos, remaining_len);
+                    pos += remaining_len;
+                    
+                    buffer[pos] = ' ';
+                    pos++;
+                    
+                    write(STDOUT_FILENO, matches[0] + (pos - remaining_len - 1), remaining_len);
+                    write(STDOUT_FILENO, " ", 1);
+                    tab_pressed = 0;
+                } 
+                else if (match_count > 1) {
+                    char common_prefix[1024];
+                    get_common_prefix(matches, match_count, common_prefix);
+                    int prefix_len = strlen(common_prefix);
+
+                    if (prefix_len > pos) {
+                        int add_len = prefix_len - pos;
+                        strncpy(&buffer[pos], common_prefix + pos, add_len);
+                        write(STDOUT_FILENO, common_prefix + pos, add_len);
+                        pos += add_len;
+                        tab_pressed = 0; 
+                    } 
+                    else {
+                        if (!tab_pressed) {
+                            write(STDOUT_FILENO, "\a", 1);
+                            tab_pressed = 1;
+                        } else {
+                            qsort(matches, match_count, sizeof(char *), cmpstringp);
+                            write(STDOUT_FILENO, "\n", 1);
+                            for (int i = 0; i < match_count; i++) {
+                                write(STDOUT_FILENO, matches[i], strlen(matches[i]));
+                                write(STDOUT_FILENO, "  ", 2);
+                            }
+                            write(STDOUT_FILENO, "\n$ ", 3);
+                            write(STDOUT_FILENO, buffer, pos); 
+                            tab_pressed = 0;
+                        }
+                    }
+                } else {
+                    write(STDOUT_FILENO, "\a", 1);
+                    tab_pressed = 0;
+                }
             }
             
             // Cleanup matches
